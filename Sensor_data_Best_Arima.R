@@ -1,14 +1,15 @@
 
 # Periklis Kontoroupis
-# 3/12/2024
-# Fit ARIMA models to sensor data and do some basic analysis
+# 3/12/24
+# Fit the best ARIMA stucture to data 
+
 library(tidyverse)
 library(forecast)
 library(ggplot2)
 library(data.table)
 
 # Replace with the correct absolute file path to your .rds file
-file_path <- "C:/..../20230210 lab data for kriging_v2.rds"
+file_path <- "C:/.../20230210 lab data for kriging_v2.rds"
 
 # Read the RDS file
 sensor_data <- readRDS(file_path)
@@ -48,8 +49,6 @@ calculate_r_squared <- function(observed, predicted) {
 }
 
 
-library(dplyr)
-
 filtered_data_list <- list()
 acf_data_list <- list()
 forecast_state_list <- list()
@@ -57,25 +56,40 @@ forecast_state_list <- list()
 # Loop through each unique sensorID and apply Kalman filter
 unique_sensor_ids <- tidy_sensors_day1$sensorID %>% unique()
 
-
-
 for (sensor_id in unique_sensor_ids) {
   # Subset data for the current sensorID
   sensor_data <- tidy_sensors_day1 %>%
     filter(sensorID == sensor_id)
+  
   
   # Process sensor measurements through Kalman filter
   arima_model <- auto.arima(sensor_data$value[1:800])
   forecast_state <- forecast(arima_model, h=100)
   forecast_state_list[[sensor_id]] <- forecast_state 
   
+  #ts.plot(sensor_data$value)
+  #plot(forecast_state)
+
   # Compute residuals
   arima_model <- auto.arima(sensor_data$value)
-  residuals <- residuals(arima_model)
-  filtered_state <- sensor_data$value - residuals
+  residuals <- residuals(arima_model)# sensor_data$value - filtered_state$series
+  filtered_state <- sensor_data$value -  residuals(arima_model)
   
-  # Convert filtered_state into a time series object
-  filtered_state_ts <- ts(filtered_state, start = start(sensor_data$value), frequency = frequency(sensor_data$value))
+##
+  #fit <- auto.arima(sensor_data)
+  #order <- fit$arma
+  #Est_value <- sensor_data - residuals(fit)
+  # Generate the forecast
+  #forecast_data <- forecast(fit, h = 100)
+  # Plot the forecasted data
+  plot(forecast_state, xlim = c(1, 900))#, 
+    #   main = paste("Forecast with ARIMA(", paste(order, collapse = ", "), ") Model Order"))
+  # Add the original sensor_data
+  lines(sensor_data$value, col = "black", lty = 1, xlab="Time (min)", ylab="PM 2_5")
+  # Add legend
+  legend("bottomleft", legend = c("Forecasted Data", "Original Sensor Data"),
+         col = c("blue", "black", "black"), lty = c(1, 1, 2))
+  ##
   
   # Calculate the ACF for original sensor data
   acf_original <- acf(sensor_data$value, lag.max = 30, plot = FALSE)
@@ -83,40 +97,45 @@ for (sensor_id in unique_sensor_ids) {
   # Calculate the ACF for filtered data (residuals)
   acf_filtered <- acf(residuals, lag.max = 30, plot = FALSE)
   
+#  acf(sensor_data$value, lag.max = 30, plot = FALSE)
+ # acf(residuals, lag.max = 30, plot = FALSE)
+  acf(residuals)
   # Combine ACF data for both original and filtered data
   acf_combined <- rbind(data.frame(lag = acf_original$lag, acf = acf_original$acf, type = "Original", sensorID = sensor_id),
                         data.frame(lag = acf_filtered$lag, acf = acf_filtered$acf, type = "ARIMA", sensorID = sensor_id))
   
   acf_data_list[[sensor_id]] <- acf_combined
   
+
+  
   # Calculate R-squared
   r_squared <- calculate_r_squared(sensor_data$value, filtered_state)
   print(paste("R-squared:", round(r_squared, 4)))
   
+  
   # Create a data frame with filtered data
   filtered_data <- data.frame(
     sensorID = sensor_id,
-    value = list(filtered_state_ts),  # Wrap the time series object in a list
+    value = filtered_state,
     difftime = sensor_data$difftime,
-    residuals = residuals
+    residuals = residuals#,
+    #forecasts = forecast_state$Forecast
   )
   
   # Store filtered data for the current sensorID
   filtered_data_list[[sensor_id]] <- filtered_data
+
 }
 
-# Combine the results into a single data frame
-filtered_data_combined <- bind_rows(filtered_data_list, .id = "sensorID")
-
+filtered_data_combined <- do.call(rbind, filtered_data_list)
 
 # Combine ACF data for all sensors
 acf_combined_all <- do.call(rbind, acf_data_list)
 
-forecast_state_combined   <- do.call(rbind,   forecast_state_list)
 
 
 # Create a data.table from the list of data frames
-#converted_data_table <- rbindlist(forecast_state_list, idcol = "deviceID")
+converted_data_table <- rbindlist(forecast_state_list, idcol = "deviceID")
 
 # Print the structure of the resulting data.table
 #str(converted_data_table)
@@ -143,27 +162,26 @@ ggplot(filtered_data_combined, aes(x = residuals)) +
 
 
 
-ggplot(filtered_data_combined, aes(x = difftime, y=residuals)) +
-  geom_line() +
-  labs(x = "time", y = "residual") +
-  ggtitle("Residuals of Kalman Filtered Data for Sensors 1 ~ 6 DAY 1") +
-  facet_wrap(~ sensorID, ncol = 2) +
-  theme(legend.position = "bottom") +
-  coord_cartesian(xlim = c(0, 200))
 
 
-#plot_data <- forecast_state_combined %>%
-#  select(device, method, model, level, mean, lower, upper, sensorID)
+
+#filtered_data_combined <- do.call(rbind, filtered_data_list)
+forecast_state_combined <- do.call(rbind, forecast_state_list)
+
+
+plot_data <- forecast_state_combined %>%
+  select(device, method, model, level, mean, lower, upper, sensorID)
 
 # Step 2: Create ggplot with facet_wrap
-#ggplot(plot_data, aes(x = x, y = mean, color = method, fill = method)) +
-#  geom_line() +
-#  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2) +
-#  labs(title = "Forecast for each sensorID",
-#       x = "X-axis label",
-#       y = "Y-axis label") +
-#  facet_wrap(~ sensorID, ncol = 2) +
-#  theme_minimal()
+ggplot(plot_data, aes(x = x, y = mean, color = method, fill = method)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2) +
+  labs(title = "Forecast for each sensorID",
+       x = "X-axis label",
+       y = "Y-axis label") +
+  facet_wrap(~ sensorID, ncol = 2) +
+  theme_minimal()
 
-
+# Combine ACF data for all sensors
+acf_combined_all <- do.call(rbind, acf_data_list)
 
